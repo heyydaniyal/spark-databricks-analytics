@@ -1,0 +1,3 @@
+# Keep folder, ignore built zips
+*
+!.gitignore

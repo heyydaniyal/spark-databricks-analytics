@@ -1,0 +1,3 @@
+# Keep folder, ignore contents (raw CSVs are too large / not ours to commit)
+*
+!.gitignore

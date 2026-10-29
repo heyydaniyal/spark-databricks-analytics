@@ -1,0 +1,5 @@
+# OS / editor junk (folder-specific rules live in each subfolder)
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
