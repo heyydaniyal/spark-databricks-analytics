@@ -27,6 +27,21 @@ BRONZE_TRANSACTIONS = table("bronze_transactions")
 # Output of the Phase 1 quality checks
 QUALITY_REPORT = table("quality_report")
 
+# Silver layer: cleaned data (Phase 2)
+SILVER_CHURN = table("silver_churn")
+SILVER_TRANSACTIONS = table("silver_transactions")
+
+# Gold layer: customer features + fixed train/val/test assignment (Phase 2).
+# Every later notebook (EDA, model, segments, graph) reads this one table.
+GOLD_CHURN = table("gold_churn_features")
+
+# Synthetic copy of the customers, used ONLY for the scalability test (never for insights)
+SCALE_TEST_CHURN = table("scaletest_churn_x100")
+SCALE_FACTOR = 100
+
+# Train / validation / test shares, stratified by Exited (see src/ml.py)
+SPLIT_RATIOS = {"train": 0.70, "val": 0.15, "test": 0.15}
+
 # Expected sizes, taken from the dataset audit. Ingestion fails loudly if they change.
 EXPECTED_ROWS = {"churn": 10_000, "transactions": 1_000}
 

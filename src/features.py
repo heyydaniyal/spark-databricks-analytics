@@ -65,3 +65,38 @@ def add_customer_groups(df: DataFrame) -> DataFrame:
         credit_score_group().alias("CreditScoreGroup"),
         products_flag().alias("ProductsFlag"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: engineered features for the gold table
+# ---------------------------------------------------------------------------
+
+def add_engineered_features(df: DataFrame) -> DataFrame:
+    """New customer descriptors, each motivated by a GX_01 / EDA finding.
+
+    - ZeroBalance (0/1): 36% of customers have exactly 0 balance; they churn much less.
+    - BalanceToSalary: balance relative to income. Null if salary is 0 or missing (never
+      happens here, but avoids a division by zero).
+    - LogBalanceToSalary: log(1 + BalanceToSalary). The plain ratio is extremely skewed
+      (median 0.75, max 10,615) because some salaries are unrealistically small (min 11.58);
+      the log keeps the order but stops a few extreme customers from dominating the model.
+    - Engagement (0-3): IsActiveMember + HasCrCard + (holds 2 or more products).
+    """
+    salary = F.col("EstimatedSalary")
+    ratio = F.when(salary > 0, F.round(F.col("Balance") / salary, 4))
+    return df.select(
+        "*",
+        (F.col("Balance") == 0).cast("int").alias("ZeroBalance"),
+        ratio.alias("BalanceToSalary"),
+        F.round(F.log1p(ratio), 4).alias("LogBalanceToSalary"),
+        (
+            F.col("IsActiveMember")
+            + F.col("HasCrCard")
+            + (F.col("NumOfProducts") >= 2).cast("int")
+        ).alias("Engagement"),
+    )
+
+
+def build_gold_features(silver_churn: DataFrame) -> DataFrame:
+    """Silver customers -> gold customers: customer groups + engineered features."""
+    return silver_churn.transform(add_customer_groups).transform(add_engineered_features)

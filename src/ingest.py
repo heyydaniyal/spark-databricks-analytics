@@ -1,5 +1,7 @@
 """Reading raw CSVs and writing bronze Delta tables."""
 
+from typing import Optional, Sequence
+
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructType
@@ -39,9 +41,17 @@ def write_bronze(df: DataFrame, table_name: str) -> None:
     Overwrite makes the notebook re-runnable: running it twice gives the same table,
     not duplicated rows.
     """
-    (
-        df.write.format("delta")
-        .mode("overwrite")
-        .option("overwriteSchema", True)
-        .saveAsTable(table_name)
-    )
+    write_table(df, table_name)
+
+
+def write_table(df: DataFrame, table_name: str, partition_by: Optional[Sequence[str]] = None) -> None:
+    """Write (or fully replace) any Delta table: bronze, silver or gold.
+
+    - overwrite + overwriteSchema: re-running a notebook rebuilds the table from scratch.
+    - partition_by: optional column(s) to split the files on disk by (e.g. Geography), so
+      queries that filter on that column only read the matching folders.
+    """
+    writer = df.write.format("delta").mode("overwrite").option("overwriteSchema", True)
+    if partition_by:
+        writer = writer.partitionBy(*partition_by)
+    writer.saveAsTable(table_name)
