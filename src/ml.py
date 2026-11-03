@@ -1,20 +1,32 @@
 """Model preparation shared by every modelling notebook (Phase 2 defines it, Phase 4 uses it).
 
-Two things live here:
+Four things live here:
 
 1. `add_split_column`: a fixed, stratified train / val / test label for every customer.
    Stored in the gold table, so the model (Phase 4), the segments (Phase 5) and the graph
    (Phase 6) all use exactly the same split, and the test customers are never seen in training.
 
 2. `build_preprocessing_stages`: the steps that turn customer columns into the single numeric
-   vector Spark MLlib models need. They are returned as a list of *unfitted* stages, so Phase 4
-   can do `Pipeline(stages=build_preprocessing_stages() + [classifier])` and fit everything
-   on the training rows only.
+   vector Spark MLlib models need. They are returned as a list of *unfitted* stages, so any
+   phase can fit them on the training rows only — the whole training split, or one
+   cross-validation fold at a time (nothing leaks from the rows being scored).
+
+3. `make_pipeline`: those preparation stages + one classifier, wrapped as ONE Spark ML
+   Pipeline. Fitting the pipeline fits preparation and model together, so the scaler and
+   indexers are always learned from the same rows as the model — never from validation
+   or test customers.
+
+4. `churn_metrics`: the metrics of a churn prediction — AUC-PR and AUC-ROC, plus the
+   precision / recall / F1 of the CHURN class at the default threshold (0.5). One shared
+   definition, so every phase that judges a model scores it the same way.
 """
 
 from typing import Dict, List, Sequence
 
+from pyspark.ml import Pipeline
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.feature import OneHotEncoder, StandardScaler, StringIndexer, VectorAssembler
+from pyspark.ml.functions import vector_to_array
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 
@@ -82,6 +94,56 @@ def build_preprocessing_stages(
         VectorAssembler(inputCols=ohe_cols + list(numeric), outputCol=f"{output_col}_raw"),
         StandardScaler(inputCol=f"{output_col}_raw", outputCol=output_col, withMean=True, withStd=True),
     ]
+
+
+def make_pipeline(
+    classifier,
+    categorical: Sequence[str] = tuple(CATEGORICAL_FEATURES),
+    numeric: Sequence[str] = tuple(NUMERIC_FEATURES),
+) -> Pipeline:
+    """GX_02's preparation steps + one classifier, as ONE Spark ML Pipeline (unfitted).
+
+    Why a pipeline: fitting it fits the preparation (indexers, scaler) and the model
+    TOGETHER, on whatever rows .fit() is called on. Fitted on the training split, the
+    preparation sees only those rows; inside cross-validation each fold fits the
+    preparation again on that fold's training rows only — validation and test rows never
+    teach the preparation anything.
+    """
+    return Pipeline(stages=build_preprocessing_stages(categorical, numeric) + [classifier])
+
+
+def churn_metrics(preds: DataFrame, label_col: str = LABEL_COL) -> Dict:
+    """All metrics of a churn prediction DataFrame (needs label, probability, prediction).
+
+    AUC-PR and AUC-ROC from Spark's evaluators; precision / recall / F1 are for the CHURN
+    class only, computed by hand from the confusion matrix at Spark's default threshold
+    (0.5). Churn is rare (~20%), so accuracy would flatter any model — these are the
+    honest numbers, and sharing this definition keeps every phase's scores comparable.
+    """
+    auc_pr_eval = BinaryClassificationEvaluator(
+        labelCol=label_col, rawPredictionCol="probability", metricName="areaUnderPR",
+    )
+    auc_roc_eval = BinaryClassificationEvaluator(
+        labelCol=label_col, rawPredictionCol="probability", metricName="areaUnderROC",
+    )
+    df = preds.withColumn("p_churn", vector_to_array("probability")[1].cast("double"))
+    cm = df.agg(
+        F.sum(((F.col(label_col) == 1) & (F.col("prediction") == 1)).cast("int")).alias("tp"),
+        F.sum(((F.col(label_col) == 0) & (F.col("prediction") == 1)).cast("int")).alias("fp"),
+        F.sum(((F.col(label_col) == 1) & (F.col("prediction") == 0)).cast("int")).alias("fn"),
+        F.sum(((F.col(label_col) == 0) & (F.col("prediction") == 0)).cast("int")).alias("tn"),
+    ).first()
+    tp, fp, fn, tn = (int(cm[c]) for c in ("tp", "fp", "fn", "tn"))
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    return {
+        "auc_pr": round(auc_pr_eval.evaluate(df), 4),
+        "auc_roc": round(auc_roc_eval.evaluate(df), 4),
+        "precision_churn": round(precision, 4),
+        "recall_churn": round(recall, 4),
+        "f1_churn": round(2 * precision * recall / (precision + recall), 4) if precision + recall else 0.0,
+        "confusion": {"TP": tp, "FP": fp, "FN": fn, "TN": tn},
+    }
 
 
 def vector_slot_names(df: DataFrame, vector_col: str = "features_raw") -> List[str]:
