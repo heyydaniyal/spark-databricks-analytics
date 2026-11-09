@@ -35,6 +35,17 @@ SILVER_TRANSACTIONS = table("silver_transactions")
 # Every later notebook (EDA, model, segments, graph) reads this one table.
 GOLD_CHURN = table("gold_churn_features")
 
+# Phase 5: segment of every customer (CustomerId, split, segment_id, segment_name)
+CUSTOMER_SEGMENTS = table("customer_segments")
+
+# Fitted models live in their own Volume (saved by GX_04 and GX_06, loaded by later notebooks)
+MODELS_VOLUME = f"{CATALOG}.{SCHEMA}.models"
+MODELS_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/models"
+CHURN_MODEL_PATH = f"{MODELS_PATH}/churn_final_model"          # written by GX_04 Step 12
+CHURN_MODEL_SETTINGS = f"{MODELS_PATH}/churn_final_model_settings.json"
+SEGMENT_MODEL_PATH = f"{MODELS_PATH}/customer_segments_model"  # written by GX_06
+SEGMENT_MODEL_SETTINGS = f"{MODELS_PATH}/customer_segments_model_settings.json"
+
 # Synthetic copy of the customers, used ONLY for the scalability test (never for insights)
 SCALE_TEST_CHURN = table("scaletest_churn_x100")
 SCALE_FACTOR = 100
