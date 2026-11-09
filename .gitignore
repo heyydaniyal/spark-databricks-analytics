@@ -3,3 +3,6 @@
 Thumbs.db
 .vscode/
 .idea/
+
+# Python bytecode caches
+__pycache__/
