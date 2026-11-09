@@ -16,9 +16,13 @@ Four things live here:
    indexers are always learned from the same rows as the model — never from validation
    or test customers.
 
-4. `churn_metrics`: the metrics of a churn prediction — AUC-PR and AUC-ROC, plus the
-   precision / recall / F1 of the CHURN class at the default threshold (0.5). One shared
-   definition, so every phase that judges a model scores it the same way.
+4. `churn_metrics`: the metrics of a churn prediction — AUC-PR and AUC-ROC, plus accuracy
+   and the precision / recall / F1 of the CHURN class at the default threshold (0.5). One
+   shared definition, so every phase that judges a model scores it the same way. It is
+   built from two smaller helpers that also work alone: `confusion_counts` (TP / FP / FN /
+   TN of any 0/1 decision column) and `churn_class_scores` (accuracy, precision, recall,
+   F1 from those counts) — e.g. for a model with no probability column, or a decision
+   made at a threshold other than 0.5.
 """
 
 from typing import Dict, List, Sequence
@@ -26,7 +30,6 @@ from typing import Dict, List, Sequence
 from pyspark.ml import Pipeline
 from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.ml.feature import OneHotEncoder, StandardScaler, StringIndexer, VectorAssembler
-from pyspark.ml.functions import vector_to_array
 from pyspark.sql import DataFrame, Window
 from pyspark.sql import functions as F
 
@@ -112,13 +115,45 @@ def make_pipeline(
     return Pipeline(stages=build_preprocessing_stages(categorical, numeric) + [classifier])
 
 
+def confusion_counts(
+    preds: DataFrame, decision_col: str = "prediction", label_col: str = LABEL_COL,
+) -> Dict[str, int]:
+    """TP / FP / FN / TN of a 0/1 decision column against the label, in ONE pass.
+
+    `decision_col` is Spark's `prediction` (threshold 0.5) by default; pass any other 0/1
+    column (e.g. `contact`, a decision made at the chosen threshold) to score that instead.
+    """
+    d, y = F.col(decision_col), F.col(label_col)
+    cm = preds.agg(
+        F.sum(((y == 1) & (d == 1)).cast("int")).alias("TP"),
+        F.sum(((y == 0) & (d == 1)).cast("int")).alias("FP"),
+        F.sum(((y == 1) & (d == 0)).cast("int")).alias("FN"),
+        F.sum(((y == 0) & (d == 0)).cast("int")).alias("TN"),
+    ).first()
+    return {k: int(cm[k] or 0) for k in ("TP", "FP", "FN", "TN")}
+
+
+def churn_class_scores(counts: Dict[str, int], digits: int = 4) -> Dict[str, float]:
+    """Accuracy and the CHURN class's precision / recall / F1 from confusion counts."""
+    tp, fp, fn, tn = (counts[k] for k in ("TP", "FP", "FN", "TN"))
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "accuracy": round((tp + tn) / (tp + fp + fn + tn), digits),
+        "precision_churn": round(precision, digits),
+        "recall_churn": round(recall, digits),
+        "f1_churn": round(f1, digits),
+    }
+
+
 def churn_metrics(preds: DataFrame, label_col: str = LABEL_COL) -> Dict:
     """All metrics of a churn prediction DataFrame (needs label, probability, prediction).
 
-    AUC-PR and AUC-ROC from Spark's evaluators; precision / recall / F1 are for the CHURN
-    class only, computed by hand from the confusion matrix at Spark's default threshold
-    (0.5). Churn is rare (~20%), so accuracy would flatter any model — these are the
-    honest numbers, and sharing this definition keeps every phase's scores comparable.
+    AUC-PR and AUC-ROC from Spark's evaluators; accuracy and precision / recall / F1 of
+    the CHURN class from the confusion matrix at Spark's default threshold (0.5). Churn is
+    rare (~20%), so accuracy alone would flatter any model — the churn-class numbers are
+    the honest ones, and sharing this definition keeps every phase's scores comparable.
     """
     auc_pr_eval = BinaryClassificationEvaluator(
         labelCol=label_col, rawPredictionCol="probability", metricName="areaUnderPR",
@@ -126,23 +161,12 @@ def churn_metrics(preds: DataFrame, label_col: str = LABEL_COL) -> Dict:
     auc_roc_eval = BinaryClassificationEvaluator(
         labelCol=label_col, rawPredictionCol="probability", metricName="areaUnderROC",
     )
-    df = preds.withColumn("p_churn", vector_to_array("probability")[1].cast("double"))
-    cm = df.agg(
-        F.sum(((F.col(label_col) == 1) & (F.col("prediction") == 1)).cast("int")).alias("tp"),
-        F.sum(((F.col(label_col) == 0) & (F.col("prediction") == 1)).cast("int")).alias("fp"),
-        F.sum(((F.col(label_col) == 1) & (F.col("prediction") == 0)).cast("int")).alias("fn"),
-        F.sum(((F.col(label_col) == 0) & (F.col("prediction") == 0)).cast("int")).alias("tn"),
-    ).first()
-    tp, fp, fn, tn = (int(cm[c]) for c in ("tp", "fp", "fn", "tn"))
-    precision = tp / (tp + fp) if tp + fp else 0.0
-    recall = tp / (tp + fn) if tp + fn else 0.0
+    counts = confusion_counts(preds, label_col=label_col)
     return {
-        "auc_pr": round(auc_pr_eval.evaluate(df), 4),
-        "auc_roc": round(auc_roc_eval.evaluate(df), 4),
-        "precision_churn": round(precision, 4),
-        "recall_churn": round(recall, 4),
-        "f1_churn": round(2 * precision * recall / (precision + recall), 4) if precision + recall else 0.0,
-        "confusion": {"TP": tp, "FP": fp, "FN": fn, "TN": tn},
+        "auc_pr": round(auc_pr_eval.evaluate(preds), 4),
+        "auc_roc": round(auc_roc_eval.evaluate(preds), 4),
+        **churn_class_scores(counts),
+        "confusion": counts,
     }
 
 
