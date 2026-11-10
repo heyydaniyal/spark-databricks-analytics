@@ -5,6 +5,8 @@ Data lives in a Unity Catalog Volume (not in the Git repo, not in DBFS), as requ
 Databricks Free Edition (serverless).
 """
 
+import os
+
 CATALOG = "workspace"
 SCHEMA = "churn"
 VOLUME = "raw"
@@ -45,6 +47,17 @@ CHURN_MODEL_PATH = f"{MODELS_PATH}/churn_final_model"          # written by GX_0
 CHURN_MODEL_SETTINGS = f"{MODELS_PATH}/churn_final_model_settings.json"
 SEGMENT_MODEL_PATH = f"{MODELS_PATH}/customer_segments_model"  # written by GX_06
 SEGMENT_MODEL_SETTINGS = f"{MODELS_PATH}/customer_segments_model_settings.json"
+
+# Phase 6 (GX_07) runs on a local machine, not on Databricks: GraphFrames' algorithms need a
+# Spark server plug-in that serverless does not allow (see GX_00). It reads the same raw CSVs
+# from the repo's data/raw folder and rebuilds every table it needs with the same src/ code.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+LOCAL_RAW_PATH = os.path.join(REPO_ROOT, "data", "raw")
+LOCAL_CHURN_CSV = os.path.join(LOCAL_RAW_PATH, "churn.csv")
+LOCAL_TRANSACTIONS_CSV = os.path.join(LOCAL_RAW_PATH, "bank_transactions.csv")
+# GraphFrames library for Spark 4 / Scala 2.13. Built against Spark 4.1, so GX_07 runs on
+# pyspark 4.1.x. The Python side: pip install graphframes-py==0.12.3 (same version).
+GRAPHFRAMES_PACKAGE = "io.graphframes:graphframes-spark4_2.13:0.12.3"
 
 # Synthetic copy of the customers, used ONLY for the scalability test (never for insights)
 SCALE_TEST_CHURN = table("scaletest_churn_x100")
